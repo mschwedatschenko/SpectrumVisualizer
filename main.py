@@ -1,33 +1,45 @@
 import numpy as np
+import subprocess
+import sys
 import time
-from rtlsdr import RtlSdr
-from rgbmatrix import RGBMatrix, RGBMatrixOptions
+import os
 
-# ── Matrix setup ──────────────────────────────────────────
-options = RGBMatrixOptions()
-options.rows = 32
-options.cols = 64
-options.chain_length = 1
-options.parallel = 1
-options.hardware_mapping = 'adafruit-hat'
-matrix = RGBMatrix(options=options)
-canvas = matrix.CreateFrameCanvas()
+# ── Start pixel server ────────────────────────────────────
+proc = subprocess.Popen(
+    ['sudo', '/home/mary/rpi-rgb-led-matrix/pixel-server'],
+    stdin=subprocess.PIPE,
+    text=True,
+    bufsize=1
+)
 
-# ── SDR setup ─────────────────────────────────────────────
-sdr = RtlSdr()
-sdr.sample_rate = 2.4e6
-sdr.gain = 40
+def set_pixel(x, y, r, g, b):
+    proc.stdin.write(f"{x} {y} {r} {g} {b}\n")
+
+def show():
+    proc.stdin.write("-1 -1 0 0 0\n")
+    proc.stdin.flush()
+
+def clear():
+    for x in range(64):
+        for y in range(32):
+            set_pixel(x, y, 0, 0, 0)
+    show()
 
 # ── Band definitions ──────────────────────────────────────
 BANDS = {
-    'FM':   {'freq': 98e6,     'color': (255, 140, 0),   'col': 0},
-    'NOAA': {'freq': 137.5e6,  'color': (0,   200, 180), 'col': 11},
-    'EMS':  {'freq': 160e6,    'color': (220, 220, 255), 'col': 22},
-    'LTE':  {'freq': 800e6,    'color': (200, 30,  30),  'col': 33},
-    'ADSB': {'freq': 1090e6,   'color': (255, 255, 255), 'col': 54},
+    'FM':   {'freq': 98e6,    'color': (255, 140, 0),   'col': 0},
+    'NOAA': {'freq': 137.5e6, 'color': (0,   200, 180), 'col': 11},
+    'EMS':  {'freq': 160e6,   'color': (220, 220, 255), 'col': 22},
+    'LTE':  {'freq': 800e6,   'color': (200, 30,  30),  'col': 33},
+    'ADSB': {'freq': 1090e6,  'color': (255, 255, 255), 'col': 54},
 }
+BAND_WIDTH = 10
 
-BAND_WIDTH = 10  # pixels wide per band
+# ── SDR setup ─────────────────────────────────────────────
+from rtlsdr import RtlSdr
+sdr = RtlSdr()
+sdr.sample_rate = 2.4e6
+sdr.gain = 40
 
 # ── Smoother ──────────────────────────────────────────────
 smoothed = {band: 0.0 for band in BANDS}
@@ -50,29 +62,26 @@ def normalize(levels):
     return {k: (v - mn) / (mx - mn) for k, v in levels.items()}
 
 def draw(levels):
-    canvas.Clear()
     for band, info in BANDS.items():
         level = levels[band]
         r, g, b = info['color']
         col_start = info['col']
         bar_height = int(level * 32)
+        brightness = level ** 0.7
 
         for x in range(col_start, min(col_start + BAND_WIDTH, 64)):
             for y in range(32):
-                # Draw from bottom up
-                pixel_y = 31 - y
-                if y < bar_height:
-                    # Scale brightness with level
-                    brightness = level ** 0.7
-                    matrix.canvas.SetPixel(
-                        x, pixel_y,
+                if (31 - y) < bar_height:
+                    set_pixel(x, y,
                         int(r * brightness),
                         int(g * brightness),
-                        int(b * brightness)
-                    )
-    matrix.SwapOnVSync(canvas)
+                        int(b * brightness))
+                else:
+                    set_pixel(x, y, 0, 0, 0)
+    show()
 
-print("Starting Spectrum Visualizer...")
+# ── Main loop ─────────────────────────────────────────────
+print("Campus Spectrum Display starting...")
 print("Press Ctrl+C to stop")
 
 try:
@@ -84,14 +93,15 @@ try:
         normalized = normalize(raw)
 
         for band, val in normalized.items():
-            smoothed[band] = smooth(band, val)
+            smooth(band, val)
 
         draw(smoothed)
-        time.sleep(0.05)
 
 except KeyboardInterrupt:
     print("\nStopping...")
 finally:
-    matrix.Clear()
+    clear()
     sdr.close()
+    proc.stdin.close()
+    proc.wait()
     print("Done.")
