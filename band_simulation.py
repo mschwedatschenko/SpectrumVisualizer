@@ -17,6 +17,19 @@ class BandSmoother:
                                     (1 - self.alpha) * self.values[band])
         return self.values
 
+band_history = {b['name']: [] for b in BANDS}
+
+def get_relative_level(name, raw_power):
+    history = band_history[name]
+    history.append(raw_power)
+    if len(history) > 50:  # keep last 50 readings
+        history.pop(0)
+    mn = min(history)
+    mx = max(history)
+    if mx == mn:
+        return 0.5
+    return (raw_power - mn) / (mx - mn)
+
 def get_band_levels(fft_vals, freqs):
     bands = {
         'FM':   (88e6,  108e6),
@@ -81,8 +94,18 @@ try:
                 len(samples), 1/2.4e6)) + freq
             band_levels = get_band_levels(fft_vals, freqs)
             all_levels[band] = band_levels.get(band, 0.0)
+            sdr.center_freq = freq
+    samples = sdr.read_samples(64 * 1024)
+    fft_vals = np.abs(np.fft.fft(samples)) ** 2
+    power = float(np.mean(fft_vals))
+    return np.log10(power + 1)
 
-        normalized = normalize(all_levels)
+        normalized = {}
+        for band in BANDS:
+             normalized[band['name']] = get_relative_level(
+             band['name'], 
+            raw[band['name']]
+        )
         smoothed = smoother.update(normalized)
 
         os.system('clear')
